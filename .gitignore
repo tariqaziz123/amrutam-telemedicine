@@ -1,0 +1,14 @@
+node_modules/
+generated/
+.env
+.env.*
+!.env.example
+coverage/
+dist/
+*.log
+.DS_Store
+.agents/
+.claude/
+.cursor/
+.devin/
+.windsurf/
