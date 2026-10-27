@@ -21,7 +21,7 @@ flowchart TD
 ## 3. Main Components
 
 - **Express API:** HTTP routing, middleware, error handling, and security headers.
-- **Authentication:** JWT access tokens, hashed refresh-token storage, token rotation, and role-based authorization.
+- **Authentication:** JWT access tokens, hashed refresh-token storage, token rotation, role-based authorization, and optional TOTP multi-factor authentication.
 - **Validation:** Zod schemas validate request payloads before business logic runs.
 - **PostgreSQL / Prisma:** Relational persistence and database transactions.
 - **Audit records:** Important authentication and consultation operations create audit entries.
@@ -43,6 +43,8 @@ The database transaction and conditional slot update help prevent two requests f
 ## 5. Security
 
 - Passwords are hashed using bcrypt.
+- MFA uses time-based one-time passwords (TOTP); MFA secrets are encrypted before storage using `MFA_ENCRYPTION_KEY`.
+- When MFA is enabled, login requires a valid authenticator code before tokens are issued. Enabling MFA also revokes existing refresh tokens.
 - Access tokens are signed JWTs; refresh tokens are stored as hashes and rotated on refresh.
 - Protected routes enforce roles and resource ownership.
 - Request payloads use schema validation.
@@ -61,12 +63,10 @@ The database transaction and conditional slot update help prevent two requests f
 
 ## 7. Testing and Delivery
 
-GitHub Actions is configured to install dependencies, generate the Prisma client, apply migrations, type-check, run tests, and build the application.
-
-Current automated tests are smoke tests for liveness, database readiness, and unauthenticated access. Additional tests should cover token rotation, role and ownership checks, booking idempotency, concurrent slot booking, consultation lifecycle transitions, prescription authorization, and failure handling.
+Local verification includes TypeScript type checking, automated tests, and a production build. Automated tests cover health checks, unauthenticated consultation access, MFA secret encryption and tamper detection, TOTP validation, and login enforcement. Additional tests should cover token rotation, role and ownership checks, booking idempotency, concurrent slot booking, consultation lifecycle transitions, prescription authorization, and failure handling.
 
 ## 8. Current Limitations
 
-This implementation is an assignment-level backend and is not yet a production-certified telemedicine platform. Email verification, a complete MFA workflow, background outbox processing, distributed rate limiting, metrics/alerting integration, production deployment infrastructure, and load testing should be treated as outstanding unless separately implemented and verified.
+This implementation is an assignment-level backend and is not yet a production-certified telemedicine platform. Email verification, background outbox processing, distributed rate limiting, production metrics/alerting integration, production deployment infrastructure, and load testing should be treated as outstanding unless separately implemented and verified.
 
 The stated availability and latency targets require deployment-level redundancy, monitoring, capacity planning, and load testing before they can be claimed as achieved.

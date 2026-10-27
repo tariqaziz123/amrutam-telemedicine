@@ -39,7 +39,7 @@ A TypeScript REST API for a telemedicine platform, supporting patient authentica
    npm install
    ```
 
-2. Create a local `.env` file. Set `POSTGRES_PASSWORD`, `DATABASE_URL`, `REDIS_URL`, `JWT_ACCESS_SECRET`, and `JWT_REFRESH_SECRET`. Use separate, randomly generated JWT secrets of at least 32 characters. Do not commit `.env`.
+2. Create a local `.env` file. Set `POSTGRES_PASSWORD`, `DATABASE_URL`, `REDIS_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, and `MFA_ENCRYPTION_KEY`. Use separate, randomly generated secrets; use at least 32 characters for each JWT secret and a valid 32-byte key for MFA encryption. Keep `.env` private and never commit it.
 
 3. Start the database services:
 
@@ -74,7 +74,10 @@ The API listens on port `3000` by default.
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | POST | `/api/v1/auth/register` | Register a patient |
-| POST | `/api/v1/auth/login` | Authenticate |
+| POST | `/api/v1/auth/login` | Authenticate; requires a TOTP code when MFA is enabled |
+| POST | `/api/v1/auth/mfa/setup` | Begin authenticator-app setup (authenticated) |
+| POST | `/api/v1/auth/mfa/verify-setup` | Verify setup and enable MFA (authenticated) |
+| POST | `/api/v1/auth/mfa/disable` | Disable MFA with password and current TOTP code (authenticated) |
 | POST | `/api/v1/auth/refresh` | Refresh tokens |
 | POST | `/api/v1/auth/logout` | Revoke refresh token |
 | GET | `/api/v1/auth/me` | Current user profile |
@@ -109,11 +112,11 @@ The local Compose file provisions PostgreSQL and Redis. Redis is available for f
 
 ## Testing
 
-The smoke tests verify API liveness, database readiness, and rejection of unauthenticated consultation-list requests. Run `npm test` to execute them.
+Automated tests cover API liveness, database readiness, unauthenticated consultation access, MFA secret encryption and tamper detection, TOTP validation, and login enforcement when MFA is enabled. Run `npm test` to execute the test suite.
 
 ## Limitations
 
-This is an assignment implementation, not a certified clinical system. Email verification, MFA workflows, payment processing, production deployment infrastructure, and comprehensive end-to-end coverage must not be assumed to be implemented unless separately configured and verified.
+This is an assignment implementation, not a certified clinical system. Payment processing, production deployment infrastructure, comprehensive end-to-end coverage, and load-test verification of availability and latency targets remain outside the verified scope.
 
 ## License
 
