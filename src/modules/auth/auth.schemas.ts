@@ -11,6 +11,7 @@ export const registerSchema = z.object({
 export const loginSchema = z.object({
   email: z.string().trim().email().max(254).transform((v) => v.toLowerCase()),
   password: z.string().min(1).max(72),
+  totpCode: z.string().regex(/^\d{6}$/).optional(),
 });
 
 export const refreshSchema = z.object({
@@ -19,3 +20,11 @@ export const refreshSchema = z.object({
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export const totpCodeSchema = z.object({
+  code: z.string().regex(/^\d{6}$/, "Code must be exactly 6 digits"),
+});
+
+export const disableMfaSchema = z.object({
+  password: z.string().min(1).max(72),
+  code: z.string().regex(/^\d{6}$/, "Code must be exactly 6 digits"),
+});

@@ -4,6 +4,14 @@ import bcrypt from "bcryptjs";
 import { createHash } from "node:crypto";
 import { prisma } from "../../config/prisma.js";
 import { authenticate } from "../../middleware/authenticate.js";
+import QRCode from "qrcode";
+import {
+  createTotpSetup,
+  decryptMfaSecret,
+  encryptMfaSecret,
+  verifyTotp,
+} from "./auth.mfa.js";
+import { totpCodeSchema, disableMfaSchema } from "./auth.schemas.js";
 import {
   loginSchema,
   refreshSchema,
@@ -125,7 +133,7 @@ authRouter.post("/login", async (req, res) => {
     return;
   }
 
-  const { email, password } = parsed.data;
+  const { email, password, totpCode } = parsed.data;
   const user = await prisma.user.findUnique({ where: { email } });
 
   // Use a generic response so callers cannot easily enumerate accounts.
@@ -141,6 +149,39 @@ authRouter.post("/login", async (req, res) => {
       error: { code: "ACCOUNT_UNAVAILABLE", message: "This account is not active" },
     });
     return;
+  }
+
+    if (user.mfaEnabled) {
+    if (!user.mfaSecret || !totpCode) {
+      res.status(401).json({
+        error: {
+          code: "MFA_REQUIRED",
+          message: "An authenticator code is required to sign in",
+        },
+      });
+      return;
+    }
+
+    let validMfaCode = false;
+
+    try {
+      validMfaCode = verifyTotp(
+        decryptMfaSecret(user.mfaSecret),
+        totpCode,
+      );
+    } catch {
+      validMfaCode = false;
+    }
+
+    if (!validMfaCode) {
+      res.status(401).json({
+        error: {
+          code: "INVALID_MFA_CODE",
+          message: "Authenticator code is invalid",
+        },
+      });
+      return;
+    }
   }
 
   const refreshToken = createRefreshToken();
@@ -262,6 +303,202 @@ authRouter.post("/logout", async (req, res) => {
   });
 
   res.status(204).send();
+});
+
+// Start MFA setup. MFA remains disabled until the code is verified.
+authRouter.post("/mfa/setup", authenticate, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { id: true, email: true, status: true, mfaEnabled: true },
+    });
+
+    if (!user || user.status !== "ACTIVE") {
+      res.status(401).json({
+        error: { code: "ACCOUNT_UNAVAILABLE", message: "Account is unavailable" },
+      });
+      return;
+    }
+
+    if (user.mfaEnabled) {
+      res.status(409).json({
+        error: { code: "MFA_ALREADY_ENABLED", message: "MFA is already enabled" },
+      });
+      return;
+    }
+
+    const setup = createTotpSetup(user.email);
+    const qrCodeDataUrl = await QRCode.toDataURL(setup.otpauthUrl);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { mfaPendingSecret: encryptMfaSecret(setup.secret) },
+    });
+
+    res.status(200).json({
+      message: "Scan the QR code with your authenticator app, then verify the code.",
+      qrCodeDataUrl,
+      secret: setup.secret,
+    });
+  } catch {
+    res.status(500).json({
+      error: { code: "INTERNAL_SERVER_ERROR", message: "Unable to start MFA setup" },
+    });
+  }
+});
+
+// Enable MFA only after verifying the authenticator code.
+authRouter.post("/mfa/verify-setup", authenticate, async (req, res) => {
+  const parsed = totpCodeSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    res.status(400).json({
+      error: { code: "VALIDATION_ERROR", message: "A valid six-digit code is required" },
+    });
+    return;
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: {
+        id: true,
+        status: true,
+        mfaEnabled: true,
+        mfaPendingSecret: true,
+      },
+    });
+
+    if (!user || user.status !== "ACTIVE") {
+      res.status(401).json({
+        error: { code: "ACCOUNT_UNAVAILABLE", message: "Account is unavailable" },
+      });
+      return;
+    }
+
+    if (user.mfaEnabled) {
+      res.status(409).json({
+        error: { code: "MFA_ALREADY_ENABLED", message: "MFA is already enabled" },
+      });
+      return;
+    }
+
+    if (!user.mfaPendingSecret) {
+      res.status(400).json({
+        error: { code: "MFA_SETUP_REQUIRED", message: "Start MFA setup first" },
+      });
+      return;
+    }
+
+    const secret = decryptMfaSecret(user.mfaPendingSecret);
+
+    if (!verifyTotp(secret, parsed.data.code)) {
+      res.status(401).json({
+        error: { code: "INVALID_MFA_CODE", message: "Authenticator code is invalid" },
+      });
+      return;
+    }
+
+
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          mfaSecret: user.mfaPendingSecret,
+          mfaPendingSecret: null,
+          mfaEnabled: true,
+        },
+      });
+
+      await tx.refreshToken.updateMany({
+        where: { userId: user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+
+      await tx.auditLog.create({
+        data: auditData(req, user.id, "AUTH_MFA_ENABLED", user.id),
+      });
+    });
+
+
+    res.status(200).json({ message: "MFA enabled successfully" });
+  } catch {
+    res.status(500).json({
+      error: { code: "INTERNAL_SERVER_ERROR", message: "Unable to verify MFA setup" },
+    });
+  }
+});
+
+// Disable MFA only after checking both the password and current TOTP code.
+authRouter.post("/mfa/disable", authenticate, async (req, res) => {
+  const parsed = disableMfaSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    res.status(400).json({
+      error: { code: "VALIDATION_ERROR", message: "Password and six-digit code are required" },
+    });
+    return;
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: {
+        id: true,
+        status: true,
+        passwordHash: true,
+        mfaEnabled: true,
+        mfaSecret: true,
+      },
+    });
+
+    if (!user || user.status !== "ACTIVE") {
+      res.status(401).json({
+        error: { code: "ACCOUNT_UNAVAILABLE", message: "Account is unavailable" },
+      });
+      return;
+    }
+
+    if (
+      !user.mfaEnabled ||
+      !user.mfaSecret ||
+      !(await bcrypt.compare(parsed.data.password, user.passwordHash)) ||
+      !verifyTotp(decryptMfaSecret(user.mfaSecret), parsed.data.code)
+    ) {
+      res.status(401).json({
+        error: { code: "MFA_VERIFICATION_FAILED", message: "Password or authenticator code is invalid" },
+      });
+      return;
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          mfaEnabled: false,
+          mfaSecret: null,
+          mfaPendingSecret: null,
+        },
+      });
+
+      await tx.refreshToken.updateMany({
+        where: { userId: user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+
+      await tx.auditLog.create({
+        data: auditData(req, user.id, "AUTH_MFA_DISABLED", user.id),
+      });
+    });
+
+    res.status(200).json({
+      message: "MFA disabled. Please sign in again to establish a new session.",
+    });
+  } catch {
+    res.status(500).json({
+      error: { code: "INTERNAL_SERVER_ERROR", message: "Unable to disable MFA" },
+    });
+  }
 });
 
 // Protected endpoint for verifying that authentication middleware works.

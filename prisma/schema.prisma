@@ -55,6 +55,8 @@ model User {
   role              UserRole   @default(PATIENT)
   status            UserStatus @default(PENDING_VERIFICATION)
   mfaEnabled        Boolean    @default(false) @map("mfa_enabled")
+  mfaSecret         String?    @map("mfa_secret") @db.VarChar(512)
+  mfaPendingSecret  String?    @map("mfa_pending_secret") @db.VarChar(512)
   emailVerifiedAt   DateTime?  @map("email_verified_at") @db.Timestamptz(6)
   createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
