@@ -108,12 +108,30 @@ app.use("/api/v1/consultations", prescriptionRouter);
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
 app.get("/openapi.json", (_req, res) => res.json(openApiSpec));
 
-app.get("/metrics", async (_req, res, next) => {
+
+app.get("/metrics", async (req, res, next) => {
+  const metricsToken = process.env.METRICS_TOKEN;
+  const authorization = req.get("authorization");
+
+  if (!metricsToken) {
+    res.status(404).json({
+      error: { code: "NOT_FOUND", message: "Resource not found" },
+    });
+    return;
+  }
+
+  if (authorization !== `Bearer ${metricsToken}`) {
+    res.status(401).json({
+      error: {
+        code: "UNAUTHORIZED",
+        message: "Metrics authentication required",
+      },
+    });
+    return;
+  }
+
   try {
-    res.setHeader(
-      "Content-Type",
-      metricsRegistry.contentType,
-    );
+    res.setHeader("Content-Type", metricsRegistry.contentType);
     res.status(200).send(await metricsRegistry.metrics());
   } catch (error) {
     next(error);
